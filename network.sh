@@ -197,6 +197,16 @@ function createOrgs() {
       fatalln "Failed to generate certificates..."
     fi
 
+    infoln "Creating Org3 Identities"
+
+    set -x
+    cryptogen generate --config=./addOrg3/org3-crypto.yaml --output="organizations"
+    res=$?
+    { set +x; } 2>/dev/null
+    if [ $res -ne 0 ]; then
+      fatalln "Failed to generate certificates..."
+    fi
+
   fi
 
   # Create crypto material using cfssl
@@ -312,10 +322,31 @@ function networkUp() {
 
   DOCKER_SOCK="${DOCKER_SOCK}" ${CONTAINER_CLI_COMPOSE} ${COMPOSE_FILES} up -d 2>&1
 
+  # Also bring up Org3 peer
+  COMPOSE_ORG3_FILES="-f addOrg3/compose/compose-org3.yaml -f addOrg3/compose/${CONTAINER_CLI}/${CONTAINER_CLI}-compose-org3.yaml"
+  DOCKER_SOCK="${DOCKER_SOCK}" ${CONTAINER_CLI_COMPOSE} ${COMPOSE_ORG3_FILES} up -d 2>&1
+
   $CONTAINER_CLI ps -a
   if [ $? -ne 0 ]; then
     fatalln "Unable to start network"
   fi
+}
+
+# Automatically create rand-channel (Org1+Org2) and verify-channel (Org1+Org2+Org3)
+function initChannels() {
+  infoln "Creating rand-channel (issuers: Org1, Org2)..."
+  scripts/createChannel.sh rand-channel $CLI_DELAY $MAX_RETRY $VERBOSE 0 RandChannel "1 2"
+  if [ $? -ne 0 ]; then
+    fatalln "Failed to create rand-channel"
+  fi
+
+  infoln "Creating verify-channel (issuers: Org1, Org2 + verifier: Org3)..."
+  scripts/createChannel.sh verify-channel $CLI_DELAY $MAX_RETRY $VERBOSE 0 VerifyChannel "1 2 3"
+  if [ $? -ne 0 ]; then
+    fatalln "Failed to create verify-channel"
+  fi
+
+  successln "Both channels created successfully."
 }
 
 # call the script to create the channel, join the peers of org1 and org2,
@@ -653,6 +684,7 @@ if [ "$MODE" == "prereq" ]; then
 elif [ "$MODE" == "up" ]; then
   infoln "Starting nodes with CLI timeout of '${MAX_RETRY}' tries and CLI delay of '${CLI_DELAY}' seconds and using database '${DATABASE}' ${CRYPTO_MODE}"
   networkUp
+  initChannels
 elif [ "$MODE" == "createChannel" ]; then
   infoln "Creating channel '${CHANNEL_NAME}'."
   infoln "If network is not up, starting nodes with CLI timeout of '${MAX_RETRY}' tries and CLI delay of '${CLI_DELAY}' seconds and using database '${DATABASE} ${CRYPTO_MODE}"

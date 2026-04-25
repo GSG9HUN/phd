@@ -8,11 +8,15 @@ DELAY="$2"
 MAX_RETRY="$3"
 VERBOSE="$4"
 BFT="$5"
+PROFILE="$6"
+CHANNEL_ORGS="$7"
 : ${CHANNEL_NAME:="mychannel"}
 : ${DELAY:="3"}
 : ${MAX_RETRY:="5"}
 : ${VERBOSE:="false"}
 : ${BFT:=0}
+: ${PROFILE:="ChannelUsingRaft"}
+: ${CHANNEL_ORGS:="1 2"}
 
 : ${CONTAINER_CLI:="docker"}
 if command -v ${CONTAINER_CLI}-compose > /dev/null 2>&1; then
@@ -38,7 +42,7 @@ createChannelGenesisBlock() {
 	if [ $bft_true -eq 1 ]; then
 		configtxgen -profile ChannelUsingBFT -outputBlock ./channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
 	else
-		configtxgen -profile ChannelUsingRaft -outputBlock ./channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
+		configtxgen -profile ${PROFILE} -outputBlock ./channel-artifacts/${CHANNEL_NAME}.block -channelID $CHANNEL_NAME
 	fi
 	res=$?
 	{ set +x; } 2>/dev/null
@@ -112,16 +116,16 @@ infoln "Creating channel ${CHANNEL_NAME}"
 createChannel $BFT
 successln "Channel '$CHANNEL_NAME' created"
 
-## Join all the peers to the channel
-infoln "Joining org1 peer to the channel..."
-joinChannel 1
-infoln "Joining org2 peer to the channel..."
-joinChannel 2
+## Join all the peers to the channel and set anchor peers
+for org in $CHANNEL_ORGS; do
+  infoln "Joining org${org} peer to the channel..."
+  joinChannel $org
+done
 
 ## Set the anchor peers for each org in the channel
-infoln "Setting anchor peer for org1..."
-setAnchorPeer 1
-infoln "Setting anchor peer for org2..."
-setAnchorPeer 2
+for org in $CHANNEL_ORGS; do
+  infoln "Setting anchor peer for org${org}..."
+  setAnchorPeer $org
+done
 
 successln "Channel '$CHANNEL_NAME' joined"
