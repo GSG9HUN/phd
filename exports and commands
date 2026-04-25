@@ -1,0 +1,24 @@
+export PATH="$PWD/../bin:$PATH"
+export FABRIC_CFG_PATH="$PWD/../config" 
+export CORE_PEER_TLS_ENABLED=true 
+export CORE_PEER_LOCALMSPID=Org1MSP 
+export CORE_PEER_MSPCONFIGPATH="$PWD/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp"
+export CORE_PEER_ADDRESS="localhost:7051"
+export CORE_PEER_TLS_ROOTCERT_FILE="$PWD/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+export ORDERER_CA="$PWD/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+
+
+// create channel2
+./network.sh createChannel -c channel2
+
+//orderer creating with channel2
+./addOrg3/addOrg3.sh up -c channel2
+
+//ordere3 exports inlcude the shell script now:
+export CORE_PEER_LOCALMSPID=Org3MSP
+export CORE_PEER_ADDRESS=localhost:11051
+export CORE_PEER_MSPCONFIGPATH="$PWD/organizations/peerOrganizations/org3.example.com/users/Admin@org3.example.com/msp"
+export CORE_PEER_TLS_ROOTCERT_FILE="$PWD/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt"
+
+//deploy chaincode to channel2
+./network.sh deployCC -c channel2 -ccn keygen -ccp ./chaincode/blsadd -ccl go -ccv 1.0 -ccs 1

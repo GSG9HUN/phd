@@ -14,6 +14,10 @@ import (
 // bls12381FrOrder is the BLS12-381 scalar field modulus.
 var bls12381FrOrder, _ = new(big.Int).SetString("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001", 16)
 
+// blsSigDST is the domain separation tag for BLS message hashing.
+// Must be identical to the constant in the client-keygen tool.
+const blsSigDST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_"
+
 // KeyContract only stores public keys on the ledger.
 type KeyContract struct {
 	contractapi.Contract
@@ -45,11 +49,27 @@ type RoundState struct {
 	History   []RoundStep `json:"history"`
 }
 
+// SignedMessage stores one signed payload on-chain.
+// The message and signature are public in world state under a caller-provided messageID.
+type SignedMessage struct {
+	MessageID  string `json:"messageId"`
+	UserID     string `json:"userId"`
+	Message    string `json:"message"`
+	SigHex     string `json:"sigHex"`
+	TxID       string `json:"txId"`
+	CreatorMSP string `json:"creatorMsp"`
+}
+
 var roundOrgs = []string{"Org1MSP", "Org2MSP", "Org3MSP"}
 
 // roundStateKey builds the world-state key for the round's public JSON state.
 func roundStateKey(roundID string) string {
 	return "round:" + roundID
+}
+
+// signedMessageKey builds the world-state key for stored signed messages.
+func signedMessageKey(messageID string) string {
+	return "signed:" + messageID
 }
 
 // roundRandomKey builds the private-data key used to store each org's local scalar r.
@@ -533,6 +553,185 @@ func (c *KeyContract) VerifyRoundBilinear(ctx contractapi.TransactionContextInte
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode verification result: %w", err)
+	}
+	return string(resultBytes), nil
+}
+
+// VerifySignature verifies a BLS12-381 "min-pubkey" signature against a registered user's public key.
+//
+// Scheme:
+//
+//	pk  = sk · G1_gen   (stored on-chain for userID)
+//	σ   = sk · HashToG2(message)   (produced off-chain by client-keygen -sign)
+//
+// Verification: e(G1_gen, σ) == e(pk, HashToG2(message))
+// This holds by bilinearity: e(G1, sk·H) = e(sk·G1, H) = e(pk, H).
+func (c *KeyContract) VerifySignature(ctx contractapi.TransactionContextInterface, userID, message, sigHex string) (string, error) {
+	if len(userID) == 0 || len(message) == 0 || len(sigHex) == 0 {
+		return "", fmt.Errorf("userID, message, and sigHex are all required")
+	}
+
+	// 1) Load the registered public key for userID.
+	pkBytes, err := ctx.GetStub().GetState("pk:" + userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to read public key: %w", err)
+	}
+	if pkBytes == nil {
+		return "", fmt.Errorf("public key not found for userID: %s", userID)
+	}
+	var pk bls12381.G1Affine
+	if _, err := pk.SetBytes(pkBytes); err != nil {
+		return "", fmt.Errorf("invalid stored public key: %w", err)
+	}
+
+	// 2) Decode and validate the signature (G2 point, 96 bytes compressed).
+	sig, err := pointG2FromHex(sigHex)
+	if err != nil {
+		return "", fmt.Errorf("invalid signature: %w", err)
+	}
+
+	// 3) Hash message to G2 using the same DST as the signing client.
+	h, err := bls12381.HashToG2([]byte(message), []byte(blsSigDST))
+	if err != nil {
+		return "", fmt.Errorf("hash-to-G2 error: %w", err)
+	}
+
+	// 4) Verify: e(G1_gen, σ) == e(pk, H(message))
+	var g1Gen bls12381.G1Affine
+	g1Gen.ScalarMultiplicationBase(big.NewInt(1))
+
+	lhs, err := bls12381.Pair([]bls12381.G1Affine{g1Gen}, []bls12381.G2Affine{*sig})
+	if err != nil {
+		return "", fmt.Errorf("pairing error (lhs): %w", err)
+	}
+	rhs, err := bls12381.Pair([]bls12381.G1Affine{pk}, []bls12381.G2Affine{h})
+	if err != nil {
+		return "", fmt.Errorf("pairing error (rhs): %w", err)
+	}
+
+	valid := lhs.Equal(&rhs)
+	result := map[string]interface{}{
+		"userID":  userID,
+		"message": message,
+		"valid":   valid,
+	}
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode result: %w", err)
+	}
+	return string(resultBytes), nil
+}
+
+// SubmitSignedMessage verifies a signature and stores the signed payload on-chain if valid.
+// messageID must be unique; repeated inserts with same ID are rejected.
+func (c *KeyContract) SubmitSignedMessage(ctx contractapi.TransactionContextInterface, messageID, userID, message, sigHex string) (string, error) {
+	if len(messageID) == 0 || len(userID) == 0 || len(message) == 0 || len(sigHex) == 0 {
+		return "", fmt.Errorf("messageID, userID, message, and sigHex are all required")
+	}
+
+	existing, err := ctx.GetStub().GetState(signedMessageKey(messageID))
+	if err != nil {
+		return "", fmt.Errorf("failed to check existing message: %w", err)
+	}
+	if existing != nil {
+		return "", fmt.Errorf("message already exists: %s", messageID)
+	}
+
+	verifyJSON, err := c.VerifySignature(ctx, userID, message, sigHex)
+	if err != nil {
+		return "", err
+	}
+	var verifyResult map[string]interface{}
+	if err := json.Unmarshal([]byte(verifyJSON), &verifyResult); err != nil {
+		return "", fmt.Errorf("failed to decode verification result: %w", err)
+	}
+	valid, ok := verifyResult["valid"].(bool)
+	if !ok || !valid {
+		return "", fmt.Errorf("signature is invalid for userID/message pair")
+	}
+
+	creatorMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get creator MSP: %w", err)
+	}
+
+	record := SignedMessage{
+		MessageID:  messageID,
+		UserID:     userID,
+		Message:    message,
+		SigHex:     sigHex,
+		TxID:       ctx.GetStub().GetTxID(),
+		CreatorMSP: creatorMSP,
+	}
+	recordBytes, err := json.Marshal(record)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode signed message: %w", err)
+	}
+	if err := ctx.GetStub().PutState(signedMessageKey(messageID), recordBytes); err != nil {
+		return "", fmt.Errorf("failed to store signed message: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"messageId": messageID,
+		"stored":    true,
+		"valid":     true,
+		"txId":      record.TxID,
+	}
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode result: %w", err)
+	}
+	return string(resultBytes), nil
+}
+
+// GetSignedMessage returns the stored signed payload by messageID.
+func (c *KeyContract) GetSignedMessage(ctx contractapi.TransactionContextInterface, messageID string) (string, error) {
+	if len(messageID) == 0 {
+		return "", fmt.Errorf("messageID is required")
+	}
+
+	data, err := ctx.GetStub().GetState(signedMessageKey(messageID))
+	if err != nil {
+		return "", fmt.Errorf("failed to read signed message: %w", err)
+	}
+	if data == nil {
+		return "", fmt.Errorf("signed message not found: %s", messageID)
+	}
+
+	return string(data), nil
+}
+
+// VerifyStoredSignature loads a stored signed payload and verifies it again.
+func (c *KeyContract) VerifyStoredSignature(ctx contractapi.TransactionContextInterface, messageID string) (string, error) {
+	storedJSON, err := c.GetSignedMessage(ctx, messageID)
+	if err != nil {
+		return "", err
+	}
+
+	var record SignedMessage
+	if err := json.Unmarshal([]byte(storedJSON), &record); err != nil {
+		return "", fmt.Errorf("failed to decode stored signed message: %w", err)
+	}
+
+	verifyJSON, err := c.VerifySignature(ctx, record.UserID, record.Message, record.SigHex)
+	if err != nil {
+		return "", err
+	}
+
+	var verifyResult map[string]interface{}
+	if err := json.Unmarshal([]byte(verifyJSON), &verifyResult); err != nil {
+		return "", fmt.Errorf("failed to decode verification result: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"messageId": messageID,
+		"userID":    record.UserID,
+		"valid":     verifyResult["valid"],
+		"txId":      record.TxID,
+	}
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode result: %w", err)
 	}
 	return string(resultBytes), nil
 }
