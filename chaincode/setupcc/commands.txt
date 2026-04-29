@@ -1,0 +1,92 @@
+# ============================================================
+# SetupCC – Deploy & Test Commands
+# Run from: ~/fabric-samples/test-network/
+# ============================================================
+
+# --- Environment setup (required in every new terminal) ---
+
+export PATH=$PWD/../bin:$PATH
+export FABRIC_CFG_PATH=$PWD/../config
+export TEST_NETWORK_HOME=$PWD
+. scripts/envVar.sh
+
+
+# ============================================================
+# DEPLOY
+# ============================================================
+
+./network.sh deployCC -c verify-channel -ccn setupcc -ccp ./chaincode/setupcc -ccl go -ccv 1.0 -ccs 1
+
+
+# ============================================================
+# SMOKE TEST
+# ============================================================
+
+# 1. Ping (is chaincode alive?)
+setGlobals 1
+peer chaincode query -C verify-channel -n setupcc -c '{"function":"Ping","Args":[]}'
+# Expected: setupcc:ok
+
+
+# 2. SetupParams – initialize system parameters (written by Org1)
+setGlobals 1
+peer chaincode invoke \
+  -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com \
+  --tls --cafile "$ORDERER_CA" \
+  -C verify-channel -n setupcc \
+  --peerAddresses localhost:7051 --tlsRootCertFiles "$PEER0_ORG1_CA" \
+  --peerAddresses localhost:9051 --tlsRootCertFiles "$PEER0_ORG2_CA" \
+  -c '{"function":"SetupParams","Args":["BLS12-381","97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb","73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"]}'
+# Expected: status:200
+
+
+# 3. GetSystemParams – read back parameters
+setGlobals 1
+peer chaincode query -C verify-channel -n setupcc -c '{"function":"GetSystemParams","Args":[]}'
+# Expected: {"curveName":"BLS12-381","generatorHex":"97f1...","orderHex":"73ed...","setByMsp":"Org1MSP","txId":"..."}
+
+
+# 4. RegisterIssuerKey – register issuer public key (written by Org2)
+setGlobals 2
+peer chaincode invoke \
+  -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com \
+  --tls --cafile "$ORDERER_CA" \
+  -C verify-channel -n setupcc \
+  --peerAddresses localhost:7051 --tlsRootCertFiles "$PEER0_ORG1_CA" \
+  --peerAddresses localhost:9051 --tlsRootCertFiles "$PEER0_ORG2_CA" \
+  -c '{"function":"RegisterIssuerKey","Args":["issuer-org2","89eefac26a8ec96866ee56a4f9ab5058ab1382992b7f7f7499b5f7fcb3fe3f8f2f809298a40f53465153f20f2259f1a2"]}'
+# Expected: status:200
+
+
+# 5. GetIssuerKey – read back issuer key
+setGlobals 1
+peer chaincode query -C verify-channel -n setupcc -c '{"function":"GetIssuerKey","Args":["issuer-org2"]}'
+# Expected: {"issuerId":"issuer-org2","pubKeyHex":"89ee...","createdByMsp":"Org2MSP","createdTx":"..."}
+
+
+# ============================================================
+# NEGATIVE TESTS (access control checks)
+# ============================================================
+
+# 6. Org3 cannot register an issuer key (access denied)
+setGlobals 3
+peer chaincode invoke \
+  -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com \
+  --tls --cafile "$ORDERER_CA" \
+  -C verify-channel -n setupcc \
+  --peerAddresses localhost:7051 --tlsRootCertFiles "$PEER0_ORG1_CA" \
+  --peerAddresses localhost:9051 --tlsRootCertFiles "$PEER0_ORG2_CA" \
+  -c '{"function":"RegisterIssuerKey","Args":["issuer-org3","89eefac26a8ec96866ee56a4f9ab5058ab1382992b7f7f7499b5f7fcb3fe3f8f2f809298a40f53465153f20f2259f1a2"]}'
+# Expected: endorsement failure, message:"access denied for MSP Org3MSP"
+
+
+# 7. SetupParams cannot be called again (already initialized)
+setGlobals 1
+peer chaincode invoke \
+  -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com \
+  --tls --cafile "$ORDERER_CA" \
+  -C verify-channel -n setupcc \
+  --peerAddresses localhost:7051 --tlsRootCertFiles "$PEER0_ORG1_CA" \
+  --peerAddresses localhost:9051 --tlsRootCertFiles "$PEER0_ORG2_CA" \
+  -c '{"function":"SetupParams","Args":["BLS12-381","97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb","73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"]}'
+# Expected: endorsement failure, message:"system params already initialized"

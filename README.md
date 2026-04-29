@@ -65,4 +65,23 @@ CONTAINER_CLI=podman ./network.sh up
 
 As there is no Docker-Daemon when using podman, only the `./network.sh deployCCAAS` command will work. Following the Chaincode-as-a-service Tutorial above should work. 
 
+## Anonymous Credential Protocol Mapping (Type-3 Pairing)
 
+This project uses a BLS12-381-based asymmetric (Type-3) pairing setup:
+
+$$
+e: G_1 \times G_2 \rightarrow G_T
+$$
+
+### Group Mapping
+
+| Paper Symbol | Meaning | Group |
+|---|---|---|
+| $H(m_i)$ | attribute hash | $G_1$ |
+| $C_i = x \cdot H(m_i)$ | issuer component | $G_1$ |
+| $T_U = \sum C_i$ | user aggregated credential point | $G_1$ |
+| $G$ | system generator | $G_2$ |
+| $X = x \cdot G$ | issuer public key | $G_2$ |
+| $s_t^{-1} \cdot G$ | Eq.2 left-side second argument | $G_2$ |
+| $r_t \cdot X$ | Eq.2 right-side second argument | $G_2$ |
+| $r_t s_t \sum H(m_{miss})$ | hidden attribute part | $G_1$ |
