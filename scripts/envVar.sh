@@ -26,10 +26,10 @@ export PEER0_ORG3_CA=${TEST_NETWORK_HOME}/organizations/peerOrganizations/org3.e
 # Set environment variables for the peer org
 setGlobals() {
   local USING_ORG=""
-  if [ -z "$OVERRIDE_ORG" ]; then
+  if [ -z "${OVERRIDE_ORG:-}" ]; then
     USING_ORG=$1
   else
-    USING_ORG="${OVERRIDE_ORG}"
+    USING_ORG="${OVERRIDE_ORG:-}"
   fi
   infoln "Using organization ${USING_ORG}"
   if [ $USING_ORG -eq 1 ]; then
@@ -51,7 +51,7 @@ setGlobals() {
     errorln "ORG Unknown"
   fi
 
-  if [ "$VERBOSE" = "true" ]; then
+  if [ "${VERBOSE:-false}" = "true" ]; then
     env | grep CORE
   fi
 }

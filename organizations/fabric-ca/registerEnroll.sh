@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 
+copy_first_file() {
+  local source_dir=$1
+  local target_file=$2
+  local first_file
+
+  first_file=$(find "$source_dir" -type f | head -n 1)
+  if [[ -z "$first_file" ]]; then
+    echo "Missing file in directory: $source_dir" >&2
+    return 1
+  fi
+
+  cp "$first_file" "$target_file"
+}
+
 function createOrg1() {
   infoln "Enrolling the CA admin"
   mkdir -p organizations/peerOrganizations/org1.example.com/
@@ -39,10 +53,12 @@ function createOrg1() {
   mkdir -p "${PWD}/organizations/peerOrganizations/org1.example.com/ca"
   cp "${PWD}/organizations/fabric-ca/org1/ca-cert.pem" "${PWD}/organizations/peerOrganizations/org1.example.com/ca/ca.org1.example.com-cert.pem"
 
-  infoln "Registering peer0"
-  set -x
-  fabric-ca-client register --caname ca-org1 --id.name peer0 --id.secret peer0pw --id.type peer --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
-  { set +x; } 2>/dev/null
+  for PEER in peer0 peer1 peer2 peer3; do
+    infoln "Registering ${PEER}"
+    set -x
+    fabric-ca-client register --caname ca-org1 --id.name ${PEER} --id.secret ${PEER}pw --id.type peer --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
+    { set +x; } 2>/dev/null
+  done
 
   infoln "Registering user"
   set -x
@@ -54,22 +70,23 @@ function createOrg1() {
   fabric-ca-client register --caname ca-org1 --id.name org1admin --id.secret org1adminpw --id.type admin --id.attrs "role=issuer:ecert" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
   { set +x; } 2>/dev/null
 
-  infoln "Generating the peer0 msp"
-  set -x
-  fabric-ca-client enroll -u https://peer0:peer0pw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
-  { set +x; } 2>/dev/null
+  for PEER in peer0 peer1 peer2 peer3; do
+    infoln "Generating the ${PEER} msp"
+    set -x
+    fabric-ca-client enroll -u https://${PEER}:${PEER}pw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
+    { set +x; } 2>/dev/null
 
-  cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp/config.yaml"
+    cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/msp/config.yaml"
 
-  infoln "Generating the peer0-tls certificates, use --csr.hosts to specify Subject Alternative Names"
-  set -x
-  fabric-ca-client enroll -u https://peer0:peer0pw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls" --enrollment.profile tls --csr.hosts peer0.org1.example.com --csr.hosts localhost --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
-  { set +x; } 2>/dev/null
+    infoln "Generating the ${PEER}-tls certificates, use --csr.hosts to specify Subject Alternative Names"
+    set -x
+    fabric-ca-client enroll -u https://${PEER}:${PEER}pw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls" --enrollment.profile tls --csr.hosts ${PEER}.org1.example.com --csr.hosts localhost --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
+    { set +x; } 2>/dev/null
 
-  # Copy the tls CA cert, server cert, server keystore to well known file names in the peer's tls directory that are referenced by peer startup config
-  cp "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/tlscacerts/"* "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
-  cp "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/signcerts/"* "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/server.crt"
-  cp "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/keystore/"* "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/server.key"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/tlscacerts" "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/ca.crt"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/signcerts" "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/server.crt"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/keystore" "${PWD}/organizations/peerOrganizations/org1.example.com/peers/${PEER}.org1.example.com/tls/server.key"
+  done
 
   infoln "Generating the user msp"
   set -x
@@ -125,10 +142,12 @@ function createOrg2() {
   mkdir -p "${PWD}/organizations/peerOrganizations/org2.example.com/ca"
   cp "${PWD}/organizations/fabric-ca/org2/ca-cert.pem" "${PWD}/organizations/peerOrganizations/org2.example.com/ca/ca.org2.example.com-cert.pem"
 
-  infoln "Registering peer0"
-  set -x
-  fabric-ca-client register --caname ca-org2 --id.name peer0 --id.secret peer0pw --id.type peer --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
-  { set +x; } 2>/dev/null
+  for PEER in peer0 peer1 peer2 peer3; do
+    infoln "Registering ${PEER}"
+    set -x
+    fabric-ca-client register --caname ca-org2 --id.name ${PEER} --id.secret ${PEER}pw --id.type peer --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
+    { set +x; } 2>/dev/null
+  done
 
   infoln "Registering user"
   set -x
@@ -140,22 +159,23 @@ function createOrg2() {
   fabric-ca-client register --caname ca-org2 --id.name org2admin --id.secret org2adminpw --id.type admin --id.attrs "role=issuer:ecert" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
   { set +x; } 2>/dev/null
 
-  infoln "Generating the peer0 msp"
-  set -x
-  fabric-ca-client enroll -u https://peer0:peer0pw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
-  { set +x; } 2>/dev/null
+  for PEER in peer0 peer1 peer2 peer3; do
+    infoln "Generating the ${PEER} msp"
+    set -x
+    fabric-ca-client enroll -u https://${PEER}:${PEER}pw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
+    { set +x; } 2>/dev/null
 
-  cp "${PWD}/organizations/peerOrganizations/org2.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/msp/config.yaml"
+    cp "${PWD}/organizations/peerOrganizations/org2.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/msp/config.yaml"
 
-  infoln "Generating the peer0-tls certificates, use --csr.hosts to specify Subject Alternative Names"
-  set -x
-  fabric-ca-client enroll -u https://peer0:peer0pw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls" --enrollment.profile tls --csr.hosts peer0.org2.example.com --csr.hosts localhost --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
-  { set +x; } 2>/dev/null
+    infoln "Generating the ${PEER}-tls certificates, use --csr.hosts to specify Subject Alternative Names"
+    set -x
+    fabric-ca-client enroll -u https://${PEER}:${PEER}pw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls" --enrollment.profile tls --csr.hosts ${PEER}.org2.example.com --csr.hosts localhost --tls.certfiles "${PWD}/organizations/fabric-ca/org2/ca-cert.pem"
+    { set +x; } 2>/dev/null
 
-  # Copy the tls CA cert, server cert, server keystore to well known file names in the peer's tls directory that are referenced by peer startup config
-  cp "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/tlscacerts/"* "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
-  cp "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/signcerts/"* "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/server.crt"
-  cp "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/keystore/"* "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/server.key"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/tlscacerts" "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/ca.crt"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/signcerts" "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/server.crt"
+    copy_first_file "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/keystore" "${PWD}/organizations/peerOrganizations/org2.example.com/peers/${PEER}.org2.example.com/tls/server.key"
+  done
 
   infoln "Generating the user msp"
   set -x
@@ -230,13 +250,13 @@ function createOrderer() {
     { set +x; } 2>/dev/null
 
     # Copy the tls CA cert, server cert, server keystore to well known file names in the orderer's tls directory that are referenced by orderer startup config
-    cp "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/tlscacerts/"* "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/ca.crt"
-    cp "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/signcerts/"* "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/server.crt"
-    cp "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/keystore/"* "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/server.key"
+    copy_first_file "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/tlscacerts" "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/ca.crt"
+    copy_first_file "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/signcerts" "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/server.crt"
+    copy_first_file "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/keystore" "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/server.key"
 
     # Copy orderer org's CA cert to orderer's /msp/tlscacerts directory (for use in the orderer MSP definition)
     mkdir -p "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/msp/tlscacerts"
-    cp "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/tlscacerts/"* "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+    copy_first_file "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/tls/tlscacerts" "${PWD}/organizations/ordererOrganizations/example.com/orderers/${ORDERER}.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
   done
 
   # Register and generate artifacts for the orderer admin
@@ -245,7 +265,7 @@ function createOrderer() {
   fabric-ca-client register --caname ca-orderer --id.name ordererAdmin --id.secret ordererAdminpw --id.type admin --tls.certfiles "${PWD}/organizations/fabric-ca/ordererOrg/ca-cert.pem"
   { set +x; } 2>/dev/null
 
-  infoln "Generating the admin msp"
+  infoln "Generating the orderer admin msp"
   set -x
   fabric-ca-client enroll -u https://ordererAdmin:ordererAdminpw@localhost:9054 --caname ca-orderer -M "${PWD}/organizations/ordererOrganizations/example.com/users/Admin@example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/ordererOrg/ca-cert.pem"
   { set +x; } 2>/dev/null
@@ -299,7 +319,7 @@ function createOrg3() {
 
   infoln "Registering the org admin"
   set -x
-  fabric-ca-client register --caname ca-org3 --id.name org3admin --id.secret org3adminpw --id.type admin --tls.certfiles "${PWD}/organizations/fabric-ca/org3/ca-cert.pem"
+  fabric-ca-client register --caname ca-org3 --id.name org3admin --id.secret org3adminpw --id.type admin --id.attrs "role=verifier:ecert" --tls.certfiles "${PWD}/organizations/fabric-ca/org3/ca-cert.pem"
   { set +x; } 2>/dev/null
 
   infoln "Generating the peer0 msp"
@@ -314,9 +334,12 @@ function createOrg3() {
   fabric-ca-client enroll -u https://peer0:peer0pw@localhost:11054 --caname ca-org3 -M "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls" --enrollment.profile tls --csr.hosts peer0.org3.example.com --csr.hosts localhost --tls.certfiles "${PWD}/organizations/fabric-ca/org3/ca-cert.pem"
   { set +x; } 2>/dev/null
 
-  cp "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/tlscacerts/"* "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt"
-  cp "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/signcerts/"* "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/server.crt"
-  cp "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/keystore/"* "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/server.key"
+  copy_first_file "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/tlscacerts" "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt"
+  copy_first_file "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/signcerts" "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/server.crt"
+  copy_first_file "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/keystore" "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/server.key"
+
+  mkdir -p "${PWD}/organizations/peerOrganizations/org3.example.com/msp/tlscacerts"
+  copy_first_file "${PWD}/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/tlscacerts" "${PWD}/organizations/peerOrganizations/org3.example.com/msp/tlscacerts/ca.crt"
 
   infoln "Generating the user msp"
   set -x

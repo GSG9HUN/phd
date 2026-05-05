@@ -260,6 +260,19 @@ function createOrgs() {
     COUNTER=$((COUNTER + 1))
     done
 
+    export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org3.example.com/
+    COUNTER=0
+    rc=1
+    while [[ $rc -ne 0 && $COUNTER -lt $MAX_RETRY ]]; do
+      sleep 1
+      set -x
+      fabric-ca-client getcainfo -u https://admin:adminpw@localhost:11054 --caname ca-org3 --tls.certfiles "${PWD}/organizations/fabric-ca/org3/ca-cert.pem"
+      res=$?
+    { set +x; } 2>/dev/null
+    rc=$res
+    COUNTER=$((COUNTER + 1))
+    done
+
     infoln "Creating Org1 Identities"
 
     createOrg1
@@ -275,6 +288,9 @@ function createOrgs() {
     infoln "Creating Org3 Identities"
 
     createOrg3
+    if [ ! -d "organizations/peerOrganizations/org3.example.com/msp/cacerts" ]; then
+      fatalln "Failed to generate Org3 MSP certificates"
+    fi
 
   fi
 
